@@ -36,6 +36,7 @@ class RNFetchBlobFS {
     private DeviceEventManagerModule.RCTDeviceEventEmitter emitter;
     private String encoding = "base64";
     private OutputStream writeStreamInstance = null;
+    private InputStream readStreamInstance = null;
     private static HashMap<String, RNFetchBlobFS> fileStreams = new HashMap<>();
 
     RNFetchBlobFS(ReactApplicationContext ctx) {
@@ -292,7 +293,7 @@ class RNFetchBlobFS {
     }
 
     /**
-     * Create a file stream for read
+     * Create a file stream for read and store its instance in RNFetchBlobFS.fileStreams
      * @param path  File stream target path
      * @param encoding  File stream decoder, should be one of `base64`, `utf8`, `ascii`
      * @param bufferSize    Buffer size of read stream, default to 4096 (4095 when encode is `base64`)
@@ -319,6 +320,9 @@ class RNFetchBlobFS {
             else {
                 fs = new FileInputStream(new File(path));
             }
+
+            RNFetchBlobFS.fileStreams.put(streamId, this);
+            this.readStreamInstance = fs;
 
             byte[] buffer = new byte[chunkSize];
             int cursor = 0;
@@ -368,6 +372,7 @@ class RNFetchBlobFS {
 
             if(!error)
                 emitStreamEvent(streamId, "end", "");
+            fileStreams.remove(streamId);
             fs.close();
             buffer = null;
         } catch (FileNotFoundException err) {
@@ -474,7 +479,7 @@ class RNFetchBlobFS {
     static void closeStream(String streamId, Callback callback) {
         try {
             RNFetchBlobFS fs = fileStreams.get(streamId);
-            OutputStream stream = fs.writeStreamInstance;
+            Closeable stream = fs.writeStreamInstance != null ? fs.writeStreamInstance : fs.readStreamInstance;
             fileStreams.remove(streamId);
             stream.close();
             callback.invoke();
@@ -586,7 +591,7 @@ class RNFetchBlobFS {
                 message += e.getLocalizedMessage();
             }
         }
-        // Only call the callback once to prevent the app from crashing
+                // Only call the callback once to prevent the app from crashing
         // with an 'Illegal callback invocation from native module' exception.
         if (message != "") {
             callback.invoke(message);
@@ -659,7 +664,6 @@ class RNFetchBlobFS {
     /**
      * List content of folder
      * @param path Target folder
-     * @param callback  JS context callback
      */
     static void ls(String path, Promise promise) {
         try {
