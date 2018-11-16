@@ -7,6 +7,7 @@
 import {NativeModules, Platform} from 'react-native'
 import RNFetchBlobSession from './class/RNFetchBlobSession'
 import RNFetchBlobWriteStream from './class/RNFetchBlobWriteStream'
+import RNFetchBlobPipeStream from './class/RNFetchBlobPipeStream'
 import RNFetchBlobReadStream from './class/RNFetchBlobReadStream'
 import RNFetchBlobFile from './class/RNFetchBlobFile'
 
@@ -112,6 +113,24 @@ function readStream(
     return Promise.reject(addCode('EINVAL', new TypeError('Missing argument "path" ')))
   }
   return Promise.resolve(new RNFetchBlobReadStream(path, encoding, bufferSize, tick))
+}
+
+/**
+ * Create file stream from file at `path`.
+ * @param  {string} fromUri   The file uri to copy.
+ * @param  {string} toUri   The file destination uri.
+ * @param  {boolean} bufferSize Size of stream buffer.
+ * @return {RNFetchBlobStream} RNFetchBlobStream stream instance.
+ */
+function pipeStream(
+  fromUri: string,
+  toUri: string,
+  bufferSize?: number,
+): Promise<RNFetchBlobPipeStream> {
+  if (typeof fromUri !== 'string' || typeof toUri !== 'string') {
+    return Promise.reject(addCode('EINVAL', new TypeError('Missing argument "path" ')))
+  }
+  return Promise.resolve(new RNFetchBlobPipeStream(fromUri, toUri, bufferSize))
 }
 
 /**
@@ -396,6 +415,7 @@ export default {
   session,
   ls,
   readStream,
+  pipeStream,
   mv,
   cp,
   writeStream,

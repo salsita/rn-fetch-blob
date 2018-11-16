@@ -309,6 +309,23 @@ public class RNFetchBlob extends ReactContextBaseJavaModule {
         });
     }
 
+    /**
+     * @param fromUri Stream file path
+     * @param toUri Stream file path
+     * @param bufferSize Stream buffer size, default to 4096 or 4095(base64).
+     */
+    @ReactMethod
+    public void pipeStream(final String fromUri, final String toUri, final int bufferSize, final String streamId) {
+        final ReactApplicationContext ctx = this.getReactApplicationContext();
+        fsThreadPool.execute(new Runnable() {
+            @Override
+            public void run() {
+                RNFetchBlobFS fs = new RNFetchBlobFS(ctx);
+                fs.pipeStream(fromUri, toUri, bufferSize, streamId);
+            }
+        });
+    }
+
     @ReactMethod
     public void cancelRequest(String taskId, Callback callback) {
         try {

@@ -1,6 +1,7 @@
 package com.RNFetchBlob;
 
 import android.content.res.AssetFileDescriptor;
+import android.database.Cursor;
 import android.media.MediaScannerConnection;
 import android.net.Uri;
 import android.os.AsyncTask;
@@ -8,6 +9,7 @@ import android.os.Build;
 import android.os.Environment;
 import android.os.StatFs;
 import android.os.SystemClock;
+import android.provider.OpenableColumns;
 import android.util.Base64;
 
 import com.RNFetchBlob.Utils.PathResolver;
@@ -36,7 +38,7 @@ class RNFetchBlobFS {
     private DeviceEventManagerModule.RCTDeviceEventEmitter emitter;
     private String encoding = "base64";
     private OutputStream writeStreamInstance = null;
-    private InputStream readStreamInstance = null;
+    private volatile InputStream readStreamInstance = null;
     private static HashMap<String, RNFetchBlobFS> fileStreams = new HashMap<>();
 
     RNFetchBlobFS(ReactApplicationContext ctx) {
@@ -393,6 +395,150 @@ class RNFetchBlobFS {
         }
     }
 
+
+    /**
+     * @param fromUri  File stream target path
+     * @param toUri  File stream target path
+     * @param bufferSize    Buffer size of read stream, default to 4096 (4095 when encode is `base64`)
+     */
+    void pipeStream(String fromUri, final String toUri, final int bufferSize, final String streamId) {
+        RNFetchBlobFS.fileStreams.put(streamId, this);
+        final String fromUriUnresolved = fromUri;
+        String resolved = normalizePath(fromUri);
+        if(resolved != null)
+            fromUri = resolved;
+
+        InputStream ifs = null;
+        OutputStream ofs = null;
+        String filename = "";
+        try {
+            Integer totalBytesToRead = 0;
+
+            if(resolved != null && fromUri.startsWith(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET)) {
+                // TODO: not supported yet! We are not using it in salsita
+                ifs = RNFetchBlob.RCTContext.getAssets().open(fromUri.replace(RNFetchBlobConst.FILE_PREFIX_BUNDLE_ASSET, ""));
+            }
+            // fix issue 287
+            else if(resolved == null) {
+                String[] options = {OpenableColumns.SIZE, OpenableColumns.DISPLAY_NAME};
+                Cursor value = RNFetchBlob.RCTContext.getContentResolver().query(Uri.parse(fromUri), options, null, null, null);
+                value.moveToFirst();
+                totalBytesToRead = (int) value.getLong(0);
+                filename = value.getString(1);
+                emitStreamEvent(streamId, "progress", 0, totalBytesToRead, filename);
+                this.readStreamInstance = ifs = RNFetchBlob.RCTContext.getContentResolver().openInputStream(Uri.parse(fromUri));
+            }
+            else {
+                File ifile = new File(fromUri);
+                filename = ifile.getName();
+                totalBytesToRead = (int) ifile.length();
+                ifs = new FileInputStream(ifile);
+            }
+
+            this.readStreamInstance = ifs;
+
+            // done with readStream
+            // write stream
+
+            try {
+                File dest = new File(toUri);
+                File dir = dest.getParentFile();
+
+                if(!dest.exists()) {
+                    if(dir != null && !dir.exists()) {
+                        if (!dir.mkdirs()) {
+                            emitStreamEvent(
+                                    streamId,
+                                    "error",
+                                    "ENOTDIR",
+                                    "Failed to create parent directory of '" + toUri + "'"
+                            );
+                            return;
+                        }
+                    }
+                    if(!dest.createNewFile()) {
+                        emitStreamEvent(
+                                streamId,
+                                "error",
+                                "ENOENT",
+                                "File '" + toUri + "' does not exist and could not be created"
+                        );
+                        return;
+                    }
+                } else if(dest.isDirectory()) {
+                    emitStreamEvent(
+                            streamId,
+                            "error",
+                            "EISDIR",
+                            "Expecting a file but '" + toUri + "' is a directory"
+                    );
+                    return;
+                }
+
+                ofs = new FileOutputStream(toUri, false);
+                this.writeStreamInstance = ofs;
+            } catch(Exception err) {
+                emitStreamEvent(
+                        streamId,
+                        "error",
+                        "EUNSPECIFIED",
+                        "Failed to create write stream at path `" + toUri + "`; " + err.getLocalizedMessage()
+                );
+                return;
+            }
+
+            // done with writeStream
+            byte[] buffer = new byte[bufferSize];
+            int cursor = 0;
+            boolean error = false;
+            long bytesRead = 0;
+            while ((cursor = ifs.read(buffer)) != -1) {
+                bytesRead += cursor;
+                ofs.write(buffer, 0, cursor);
+                emitStreamEvent(streamId, "progress", (int) bytesRead, totalBytesToRead, filename);
+            }
+
+
+            if(!error)
+                emitStreamEvent(streamId, "end", "");
+            fileStreams.remove(streamId);
+            ifs.close();
+            ofs.close();
+        } catch (FileNotFoundException err) {
+            emitStreamEvent(
+                    streamId,
+                    "error",
+                    "ENOENT",
+                    "No such file '" + fromUri + "'"
+            );
+        } catch (Exception err) {
+            emitStreamEvent(
+                    streamId,
+                    "error",
+                    "EUNSPECIFIED",
+                    "Failed to convert data to " + encoding + " encoded string. This might be because this encoding cannot be used for this data."
+            );
+            err.printStackTrace();
+        } finally {
+            try {
+                if (ifs != null) {
+                    ifs.close();
+                }
+                if (ofs != null) {
+                    ofs.close();
+                }
+            } catch (IOException err) {
+                emitStreamEvent(
+                        streamId,
+                        "error",
+                        "EIONC",
+                        "Failed to close either the input stream or the output stream."
+                );
+                err.printStackTrace();
+            }
+        }
+    }
+
     /**
      * Create a write stream and store its instance in RNFetchBlobFS.fileStreams
      * @param path  Target file path
@@ -477,15 +623,31 @@ class RNFetchBlobFS {
      * @param callback JS context callback
      */
     static void closeStream(String streamId, Callback callback) {
+        RNFetchBlobFS fs = fileStreams.get(streamId);
+
+        if (fs == null) return;
+
+        Closeable istream = fs.readStreamInstance;
+        Closeable ostream = fs.writeStreamInstance;
+        String error = "";
         try {
-            RNFetchBlobFS fs = fileStreams.get(streamId);
-            Closeable stream = fs.writeStreamInstance != null ? fs.writeStreamInstance : fs.readStreamInstance;
-            fileStreams.remove(streamId);
-            stream.close();
-            callback.invoke();
+            if (istream != null) istream.close();
         } catch(Exception err) {
-            callback.invoke(err.getLocalizedMessage());
+            error += err.getLocalizedMessage();
         }
+
+        try {
+            if (ostream != null) ostream.close();
+        } catch(Exception err) {
+            if(!error.isEmpty()) error += '\n';
+            error += err.getLocalizedMessage();
+        }
+
+        fileStreams.remove(streamId);
+        if (error.isEmpty())
+            callback.invoke();
+        else
+            callback.invoke(error);
     }
 
     /**
@@ -1050,6 +1212,18 @@ class RNFetchBlobFS {
         WritableMap eventData = Arguments.createMap();
         eventData.putString("event", event);
         eventData.putString("detail", data);
+        this.emitter.emit(streamName, eventData);
+    }
+
+    private void emitStreamEvent(String streamName, String event, Integer current, Integer total, String fileName) {
+        WritableMap eventData = Arguments.createMap();
+        eventData.putString("event", event);
+        WritableMap detailData = Arguments.createMap();
+        detailData.putInt("current", current);
+        detailData.putInt("total", total);
+        detailData.putString("fileName", fileName);
+
+        eventData.putMap("detail", detailData);
         this.emitter.emit(streamName, eventData);
     }
 
