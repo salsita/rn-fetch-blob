@@ -644,10 +644,12 @@ class RNFetchBlobFS {
         }
 
         fileStreams.remove(streamId);
-        if (error.isEmpty())
-            callback.invoke();
-        else
-            callback.invoke(error);
+
+        if (callback != null)
+            if (error.isEmpty())
+                callback.invoke();
+            else
+                callback.invoke(error);
     }
 
     /**
