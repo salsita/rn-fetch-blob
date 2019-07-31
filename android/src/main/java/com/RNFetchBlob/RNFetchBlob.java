@@ -28,7 +28,6 @@ import okhttp3.OkHttpClient;
 import okhttp3.JavaNetCookieJar;
 
 import java.io.File;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -183,7 +182,12 @@ public class RNFetchBlob extends ReactContextBaseJavaModule {
         threadPool.execute(new Runnable() {
             @Override
             public void run() {
-                RNFetchBlobFS.cp(path, dest, callback);
+                Uri destUri = Uri.parse(dest);
+                if ("content".equals(destUri.getScheme())) {
+                    RNFetchBlobFS.cpToContentUri(getReactApplicationContext(), path, dest, callback);
+                } else {
+                    RNFetchBlobFS.cp(path, dest, callback);
+                }
             }
         });
     }

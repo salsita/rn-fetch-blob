@@ -10,6 +10,7 @@ import android.os.Environment;
 import android.os.StatFs;
 import android.os.SystemClock;
 import android.provider.OpenableColumns;
+import android.support.v4.provider.DocumentFile;
 import android.util.Base64;
 
 import com.RNFetchBlob.Utils.PathResolver;
@@ -23,6 +24,7 @@ import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
 
 import java.io.*;
+import java.net.URLConnection;
 import java.nio.ByteBuffer;
 import java.nio.charset.Charset;
 import java.nio.charset.CharsetEncoder;
@@ -758,6 +760,57 @@ class RNFetchBlobFS {
                 // Only call the callback once to prevent the app from crashing
         // with an 'Illegal callback invocation from native module' exception.
         if (message != "") {
+            callback.invoke(message);
+        } else {
+            callback.invoke();
+        }
+    }
+
+    /**
+     * Copy file to destination path specified by content:// uri
+     * @param mCtx reactApplicationContext
+     * @param path Source path
+     * @param dest Target path
+     * @param callback  JS context callback
+     */
+    static void cpToContentUri(ReactApplicationContext mCtx, String absoluteFilePath, String targetFolderUri, Callback callback) {
+        FileInputStream in = null;
+        OutputStream out = null;
+        String message = "";
+        try {
+            Uri dirUri = Uri.parse(targetFolderUri);
+            Uri destPath = Uri.parse(absoluteFilePath);
+            DocumentFile pickedDir = DocumentFile.fromTreeUri(mCtx, dirUri);
+
+            String mimeType = URLConnection.guessContentTypeFromName(destPath.getLastPathSegment());
+            Uri targetFileUri = pickedDir.createFile(mimeType, destPath.getLastPathSegment()).getUri();
+            out = mCtx.getContentResolver().openOutputStream(targetFileUri);
+
+            in = new FileInputStream(new File(absoluteFilePath));
+
+            byte[] buff = new byte[10240];
+            int len;
+            len = in.read(buff);
+            while (len != -1) {
+                out.write(buff, 0, len);
+                len = in.read(buff);
+            }
+        } catch (Exception e) {
+            message += e.getLocalizedMessage();
+        } finally {
+            try {
+                if (in != null) {
+                    in.close();
+                }
+                if (out != null) {
+                    out.close();
+                }
+            } catch (Exception e) {
+                message += e.getLocalizedMessage();
+            }
+        }
+
+        if (!"".equals(message)) {
             callback.invoke(message);
         } else {
             callback.invoke();
